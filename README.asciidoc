@@ -1,0 +1,140 @@
+:toc:
+:toc-placement!:
+
+= Guide to create, renew and install wildcard certificates from Let's Encrypt in StorageGRID
+
+https://letsencrypt.org[Let's Encrypt] allows to create and renew certificates which are widely trusted by operating systems and browsers.
+
+This guide explains how to create, renew and install certificates from Let's Encrypt in StorageGRID.
+
+It is strongly recommended to create wildcard SSL certificates for S3 as S3 clients usually use virtual-host style by default, which requires wildcard DNS and wildcard certificates. Therfore this guide will explain how to create wildcard certificates. Let's Encrypt currently only allows creation of wildcard certificates via the DNS validation (for details see the blog post https://community.letsencrypt.org/t/acme-v2-production-environment-wildcards/55578[ACME v2 Production Environment & Wildcards]). The DNS validation requires that you are able to create a public DNS entry for the intended endpoint url (e.g. s3.example.org). It is not necessary that the endpoint is accessible via the internet, but you need control of the DNS namespace.
+
+As certbot currently does not support windows and only partially supports Mac OS, this guide uses the https://github.com/rmbolger/Posh-ACME[PowerShell ACMEv2 module] which works on all platforms. For non-Windows systems install https://github.com/PowerShell/PowerShell[PowerShell Core 6] before starting with this guide.
+
+toc::[]
+
+== Install PowerShell ACMEv2 module
+
+Install the https://github.com/rmbolger/Posh-ACME#release[PowerShell ACMEv2 module following the steps for installing a Release version]. If you intend to automatically renew the certificate with a service account, install the PowerShell module globally which requires admin privileges, or just install it for your current user.
+
+.Install PowerShell ACMEv2 module
+```
+# install for all users (requires elevated privileges)
+Install-Module -Name Posh-ACME
+
+# install for current user only
+Install-Module -Name Posh-ACME -Scope CurrentUser
+```
+
+== Create wildcard certificate
+
+The PowerShell ACMEv2 module supports https://github.com/rmbolger/Posh-ACME/wiki/List-of-Supported-DNS-Providers[various DNS providers]. The following steps describe how to use the manual DNS validation which works for any DNS provider. The `New-PACertificate` will store the certificate and private key on the local computer in a folder of the current user. These are needed to renew the certificate!
+
+.Create Certificate
+```
+New-PACertificate -Domain s3.example.com,*.s3.example.com -AcceptTOS -Contact admin@example.com
+```
+
+The output will look similar to this
+.Output of Certificate creation
+```
+PS /Users/florianfeldhaus> New-PACertificate -Domain s3.example.com,*.s3.example.com -AcceptTOS -Contact admin@example.com
+Please review the Terms of Service here: https://letsencrypt.org/documents/LE-SA-v1.2-November-15-2017.pdf
+WARNING: DnsPlugin not specified. Defaulting to Manual.
+
+Please create the following TXT records:
+------------------------------------------
+
+_acme-challenge.s3.example.com -> y5_hP8C04o8L0rToRT4otBMM5TMjWGdnqN26bnM-lzo
+_acme-challenge.s3.example.com -> 1IYiMo77d9iTtjFCWgO9bLg9Zk0HUsDvtDIOTzNtB78
+------------------------------------------
+
+Press any key to continue.:
+
+Subject             NotAfter          KeyLength Thumbprint                               AllSANs
+-------             --------          --------- ----------                               -------
+CN=*.s3.example.com 09.05.19 11:15:08 2048      BE5350D5362DCDC9255CEE5645A2C028F4662B58 {s3.example.com, *.s3.example.com}
+```
+
+The certificate, key and chain location can be shown using
+
+.Get certificate result
+```
+Get-PACertificate -MainDomain s3.example.com
+```
+
+.Output of certificate result
+```
+PS /Users/florianfeldhaus> Get-PACertificate -MainDomain s3.example.com | Format-List
+
+Subject       : CN=s3.example.com
+NotBefore     : 08.02.19 10:15:08
+NotAfter      : 09.05.19 11:15:08
+KeyLength     : 2048
+Thumbprint    : BE5350D5362DCDC9255CEE5645A2C028F4662B58
+AllSANs       : {s3.example.com, *.s3.example.com}
+CertFile      : /Users/florianfeldhaus/Library/Preferences/Posh-ACME/acme-v02.api.letsencrypt.org/51100893/s3.example.com/cert.cer
+KeyFile       : /Users/florianfeldhaus/Library/Preferences/Posh-ACME/acme-v02.api.letsencrypt.org/51100893/s3.example.com/cert.key
+ChainFile     : /Users/florianfeldhaus/Library/Preferences/Posh-ACME/acme-v02.api.letsencrypt.org/51100893/s3.example.com/chain.cer
+FullChainFile : /Users/florianfeldhaus/Library/Preferences/Posh-ACME/acme-v02.api.letsencrypt.org/51100893/s3.example.com/fullchain.cer
+PfxFile       : /Users/florianfeldhaus/Library/Preferences/Posh-ACME/acme-v02.api.letsencrypt.org/51100893/s3.example.com/cert.pfx
+PfxFullChain  : /Users/florianfeldhaus/Library/Preferences/Posh-ACME/acme-v02.api.letsencrypt.org/51100893/s3.example.com/fullchain.pfx
+PfxPass       : System.Security.SecureString
+```
+
+== Install certificate to StorageGRID
+
+To install the certificate into StorageGRID, you need the https://github.com/ffeldhaus/StorageGRID-Webscale[StorageGRID-Webscale PowerShell Module]. Follow the https://github.com/ffeldhaus/StorageGRID-Webscale#installation[Installation instructions to install it].
+
+.Install PowerShell ACMEv2 module
+```
+# install for all users (requires elevated privileges)
+Install-Module -Name StorageGRID-Webscale
+
+# install for current user only
+Install-Module -Name StorageGRID-Webscale -Scope CurrentUser
+```
+
+Connect to the StorageGRID Admin Node using the following Cmdlet (you may need to use the `-SkipCertifcateCheck` parameter if the admin node does not yet have a trusted SSL certificate)
+
+.Connect with StorageGRID admin node
+```
+Connect-SgwServer -Name admin.example.com -SkipCertificateCheck
+```
+
+Update the certificate for the object storage API service using
+
+.Update certificate for the object storage API service
+```
+Get-PACertificate -MainDomain s3.example.com | Update-SgwObjectCertificate
+```
+
+Verify that the certificate has been updated
+
+.Get certificate of the object storage API service
+```
+Get-SgwObjectCertificate
+```
+
+== Renew certificate
+
+To renew a certificate, use the following Cmdlet. This must be run on the same computer and account where the certificate was created.
+
+```
+Submit-Renewal -MainDomain s3.example.com
+```
+
+Install the certificate in StorageGRID
+
+```
+Connect-SgwServer -Name admin.example.com -SkipCertificateCheck
+Get-PACertificate | Update-SgwObjectCertificate
+```
+
+== Revoke certificate
+
+In case of a security breach or if you need to revoke the certificate for other reasons, you can delete the local certificate and revoke it via Let's Encrypt using
+
+```
+Remove-PAOrder -MainDomain s3.example.com -RevokeCert
+```
